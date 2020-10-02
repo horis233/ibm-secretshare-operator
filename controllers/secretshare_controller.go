@@ -75,7 +75,7 @@ func (r *SecretShareReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error)
 		return ctrl.Result{RequeueAfter: time.Second * 30}, nil
 	}
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: time.Second * 30}, nil
 }
 
 // copySecretConfigmap copies secret and configmap to the target namespace
