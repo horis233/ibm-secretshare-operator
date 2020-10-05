@@ -20,15 +20,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/gobuffalo/flect"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -52,24 +53,17 @@ var cmListSchema = corev1.SchemeGroupVersion.WithKind("ConfigMapList")
 
 func NewCacheBuilder(namespace string, label string, globalGvks ...schema.GroupVersionKind) cr_cache.NewCacheFunc {
 	return func(config *rest.Config, opts cr_cache.Options) (cr_cache.Cache, error) {
-		// Setup filtered secret informer that will only store/return items matching the filter for listing purposes
-		dynamicClient, err := dynamic.NewForConfig(config)
-
+		// Setup filtered informer that will only store/return items matching the filter for listing purposes
 		clientSet, err := kubernetes.NewForConfig(config)
-		if err != nil {
-			klog.Error(err, "Failed to construct client")
-			return nil, err
-		}
-		if err != nil {
-			klog.Error(err, "Failed to dynamic client")
-			return nil, err
-		}
+
 		var resync time.Duration
 		if opts.Resync != nil {
 			resync = *opts.Resync
 		}
 
-		informerMap, err := buildInformerMap(dynamicClient, opts, namespace, label, resync, globalGvks...)
+		informerMap, err := buildInformerMap(clientSet, opts, label, resync, globalGvks...)
+
+		klog.Info(len(informerMap))
 
 		if err != nil {
 			klog.Error(err, "Failed to build informer")
@@ -81,34 +75,20 @@ func NewCacheBuilder(namespace string, label string, globalGvks ...schema.GroupV
 			klog.Error(err, "Failed to init fallback cache")
 			return nil, err
 		}
-		return customCache{clientSet: clientSet, dynamicClient: dynamicClient, informerMap: informerMap, fallback: fallback, Scheme: opts.Scheme, opts: opts}, nil
+		return customCache{clientSet: clientSet, informerMap: informerMap, fallback: fallback, Scheme: opts.Scheme, opts: opts}, nil
 	}
 }
 
-func buildInformerMap(dynamicClient dynamic.Interface, opts cr_cache.Options, namespace string, label string, resync time.Duration, gvks ...schema.GroupVersionKind) (map[schema.GroupVersionKind]cache.SharedIndexInformer, error) {
-	ctx := context.TODO()
+func buildInformerMap(clientSet *kubernetes.Clientset, opts cr_cache.Options, label string, resync time.Duration, gvks ...schema.GroupVersionKind) (map[schema.GroupVersionKind]cache.SharedIndexInformer, error) {
 	informerMap := make(map[schema.GroupVersionKind]cache.SharedIndexInformer)
 	for _, gvk := range gvks {
-		mapping, err := opts.Mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
-		if err != nil {
-			return nil, err
-		}
-		listFunc := func(options metav1.ListOptions) (runtime.Object, error) {
+		plural := strings.ToLower(flect.Pluralize(gvk.Kind))
+		klog.Info(plural)
+		listerWatcher := cache.NewFilteredListWatchFromClient(clientSet.CoreV1().RESTClient(), plural, opts.Namespace, func(options *metav1.ListOptions) {
 			options.LabelSelector = label
-			result, err := dynamicClient.Resource(mapping.Resource).Namespace(namespace).List(ctx, options)
-			if err != nil {
-				klog.Errorf("Failed to list %s error %s", gvk, err)
-			}
-			return result, err
-		}
-		watchFunc := func(options metav1.ListOptions) (watch.Interface, error) {
-			options.Watch = true
-			options.LabelSelector = label
-			return dynamicClient.Resource(mapping.Resource).Namespace(namespace).Watch(ctx, options)
-		}
-
-		listerWatcher := &cache.ListWatch{ListFunc: listFunc, WatchFunc: watchFunc}
+		})
 		informer := cache.NewSharedIndexInformer(listerWatcher, &corev1.Secret{}, resync, cache.Indexers{})
+
 		informerMap[gvk] = informer
 		gvkList := schema.GroupVersionKind{Group: gvk.Group, Version: gvk.Version, Kind: gvk.Kind + "List"}
 		informerMap[gvkList] = informer
