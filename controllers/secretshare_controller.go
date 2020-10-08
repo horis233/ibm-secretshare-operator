@@ -98,6 +98,7 @@ func (r *SecretShareReconciler) copySecret(instance *ibmcpcsibmcomv1.SecretShare
 		running := true
 		secretName := secretShare.Secretname
 		secret, err := r.getSecret(secretName, ns)
+		_, err = r.listSecret(ns)
 		if err != nil {
 			if errors.IsNotFound(err) && instance.CheckSecretStatus(ns+"/"+secretName, ibmcpcsibmcomv1.Running) {
 				if r.deleteCopiedSecret(secretName, secretShare) {

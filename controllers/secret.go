@@ -23,6 +23,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/klog"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	ibmcpcsibmcomv1 "github.com/IBM/ibm-secretshare-operator/api/v1"
 )
@@ -34,6 +36,22 @@ func (r *SecretShareReconciler) getSecret(name, ns string) (*corev1.Secret, erro
 		return nil, err
 	}
 	return secret, nil
+}
+
+// getSecret gets the secret required to be copied
+func (r *SecretShareReconciler) listSecret(ns string) (*corev1.SecretList, error) {
+	secretList := &corev1.SecretList{}
+	// if err := r.Client.List(context.TODO(), secretList, &client.ListOptions{Namespace: ns}, client.MatchingLabels(map[string]string{"secretshareName": "common-services"})); err != nil {
+	// 	return nil, err
+	// }
+	if err := r.Client.List(context.TODO(), secretList, &client.ListOptions{Namespace: ns}); err != nil {
+		return nil, err
+	}
+	// for _, secret := range secretList.Items {
+	// 	klog.Info(secret.Namespace + "/" + secret.Name)
+	// }
+	klog.Info(len(secretList.Items))
+	return secretList, nil
 }
 
 // deleteSecret deletes the copied secrets
