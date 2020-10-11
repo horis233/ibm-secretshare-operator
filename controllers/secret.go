@@ -22,6 +22,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -44,13 +45,32 @@ func (r *SecretShareReconciler) listSecret(ns string) (*corev1.SecretList, error
 	// if err := r.Client.List(context.TODO(), secretList, &client.ListOptions{Namespace: ns}, client.MatchingLabels(map[string]string{"secretshareName": "common-services"})); err != nil {
 	// 	return nil, err
 	// }
-	if err := r.Client.List(context.TODO(), secretList, &client.ListOptions{Namespace: ns}); err != nil {
+	if err := r.Client.List(context.TODO(), secretList, &client.ListOptions{
+		Namespace:     ns,
+		FieldSelector: fields.OneTermEqualSelector("metadata.name", "audit-certs"),
+	}); err != nil {
 		return nil, err
 	}
-	// for _, secret := range secretList.Items {
-	// 	klog.Info(secret.Namespace + "/" + secret.Name)
-	// }
+	for _, secret := range secretList.Items {
+		klog.Info(secret.Namespace + "/" + secret.Name)
+	}
 	klog.Info(len(secretList.Items))
+
+	cmList := &corev1.ConfigMapList{}
+
+	if err := r.Client.List(context.TODO(), cmList, &client.ListOptions{
+		Namespace: ns,
+	}); err != nil {
+		return nil, err
+	}
+
+	podList := &corev1.PodList{}
+
+	if err := r.Client.List(context.TODO(), podList, &client.ListOptions{
+		Namespace: ns,
+	}); err != nil {
+		return nil, err
+	}
 	return secretList, nil
 }
 
