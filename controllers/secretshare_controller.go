@@ -21,6 +21,7 @@ import (
 	"time"
 
 	olmv1alpha1 "github.com/operator-framework/operator-lifecycle-manager/pkg/api/apis/operators/v1alpha1"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -75,7 +76,7 @@ func (r *SecretShareReconciler) Reconcile(req ctrl.Request) (ctrl.Result, error)
 		return ctrl.Result{RequeueAfter: time.Second * 30}, nil
 	}
 
-	return ctrl.Result{RequeueAfter: time.Second * 30}, nil
+	return ctrl.Result{}, nil
 }
 
 // copySecretConfigmap copies secret and configmap to the target namespace
@@ -97,8 +98,8 @@ func (r *SecretShareReconciler) copySecret(instance *ibmcpcsibmcomv1.SecretShare
 	for _, secretShare := range secretList {
 		running := true
 		secretName := secretShare.Secretname
+		_, err := r.listSecret(ns)
 		secret, err := r.getSecret(secretName, ns)
-		_, err = r.listSecret(ns)
 		if err != nil {
 			if errors.IsNotFound(err) && instance.CheckSecretStatus(ns+"/"+secretName, ibmcpcsibmcomv1.Running) {
 				if r.deleteCopiedSecret(secretName, secretShare) {
@@ -131,11 +132,11 @@ func (r *SecretShareReconciler) copySecret(instance *ibmcpcsibmcomv1.SecretShare
 				continue
 			}
 			for _, ns := range secretShare.Sharewith {
-				if err := r.ensureNs(ns.Namespace); err != nil {
-					klog.Error(err)
-					running = false
-					continue
-				}
+				// if err := r.ensureNs(ns.Namespace); err != nil {
+				// 	klog.Error(err)
+				// 	running = false
+				// 	continue
+				// }
 				if err := r.copySecretToTargetNs(secret, ns.Namespace); err != nil {
 					klog.Error(err)
 					running = false
@@ -195,11 +196,11 @@ func (r *SecretShareReconciler) copyConfigmap(instance *ibmcpcsibmcomv1.SecretSh
 				continue
 			}
 			for _, ns := range cmShare.Sharewith {
-				if err := r.ensureNs(ns.Namespace); err != nil {
-					klog.Error(err)
-					running = false
-					continue
-				}
+				// if err := r.ensureNs(ns.Namespace); err != nil {
+				// 	klog.Error(err)
+				// 	running = false
+				// 	continue
+				// }
 				if err := r.copyConfigmapToTargetNs(cm, ns.Namespace); err != nil {
 					klog.Error(err)
 					running = false
@@ -301,6 +302,16 @@ func getCMSecretToSS() handler.ToRequestsFunc {
 	}
 }
 
+func getDeployToSS() handler.ToRequestsFunc {
+	return func(object handler.MapObject) []reconcile.Request {
+		secretshare := []reconcile.Request{}
+		klog.Info(object.Meta.GetNamespace(), "/", object.Meta.GetName())
+		secretshare = append(secretshare, reconcile.Request{NamespacedName: types.NamespacedName{Name: "common-service", Namespace: "ibm-common-service"}})
+
+		return secretshare
+	}
+}
+
 func getSecretShareMapper() handler.ToRequestsFunc {
 	return func(object handler.MapObject) []reconcile.Request {
 		secretshare := []reconcile.Request{}
@@ -313,6 +324,18 @@ func getSecretShareMapper() handler.ToRequestsFunc {
 
 // SetupWithManager ...
 func (r *SecretShareReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	deployPredicates := predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool {
+			return e.Meta.GetNamespace() == "ibm-common-services"
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			return e.MetaNew.GetNamespace() == "ibm-common-services"
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			return e.Meta.GetNamespace() == "ibm-common-services"
+		},
+	}
+
 	subPredicates := predicate.Funcs{
 		CreateFunc: func(e event.CreateEvent) bool {
 			return e.Meta.GetNamespace() != "ibm-common-services"
@@ -376,6 +399,11 @@ func (r *SecretShareReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&source.Kind{Type: &olmv1alpha1.Subscription{}},
 			&handler.EnqueueRequestsFromMapFunc{ToRequests: getSecretShareMapper()},
 			builder.WithPredicates(subPredicates),
+		).
+		Watches(
+			&source.Kind{Type: &appsv1.Deployment{}},
+			&handler.EnqueueRequestsFromMapFunc{ToRequests: getDeployToSS()},
+			builder.WithPredicates(deployPredicates),
 		).
 		Complete(r)
 }

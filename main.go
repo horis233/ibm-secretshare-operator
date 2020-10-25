@@ -21,7 +21,9 @@ import (
 	"os"
 
 	olmv1alpha1 "github.com/operator-framework/operator-lifecycle-manager/pkg/api/apis/operators/v1alpha1"
+	// appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -63,6 +65,7 @@ func main() {
 	gvkLabelMap := map[schema.GroupVersionKind]string{
 		corev1.SchemeGroupVersion.WithKind("Secret"):    "secretshareName",
 		corev1.SchemeGroupVersion.WithKind("ConfigMap"): "secretshareName",
+		// appsv1.SchemeGroupVersion.WithKind("Deployment"): "test",
 	}
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:             scheme,
@@ -70,7 +73,7 @@ func main() {
 		Port:               9443,
 		LeaderElection:     enableLeaderElection,
 		LeaderElectionID:   "2e672f4a.ibm.com",
-		NewCache:           utils.NewFilteredCacheBuilder(gvkLabelMap),
+		NewCache:           utils.MultiNamespacedFilteredCacheBuilder(gvkLabelMap, []string{"ibm-common-service", "ibm-common-services", "kube-system", "services", "kube-public"}),
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")

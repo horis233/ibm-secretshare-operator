@@ -18,20 +18,28 @@ package utils
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"reflect"
 	"strings"
 	"time"
 
 	"github.com/gobuffalo/flect"
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
+	certificatesv1beta1 "k8s.io/api/certificates/v1beta1"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	toolscache "k8s.io/client-go/tools/cache"
@@ -67,7 +75,7 @@ func NewFilteredCacheBuilder(gvkLabelMap map[schema.GroupVersionKind]string) cac
 		}
 
 		// Return the customized cache
-		return filteredCache{clientSet: clientSet, informerMap: informerMap, labelSelectorMap: gvkLabelMap, fallback: fallback, Scheme: opts.Scheme}, nil
+		return filteredCache{clientSet: clientSet, informerMap: informerMap, labelSelectorMap: gvkLabelMap, fallback: fallback, namespace: opts.Namespace, Scheme: opts.Scheme}, nil
 	}
 }
 
@@ -81,7 +89,7 @@ func buildInformerMap(clientSet *kubernetes.Clientset, opts cache.Options, gvkLa
 		plural := kindToResource(gvk.Kind)
 
 		// Create ListerWatcher with the label by NewFilteredListWatchFromClient
-		listerWatcher := toolscache.NewFilteredListWatchFromClient(clientSet.CoreV1().RESTClient(), plural, opts.Namespace, func(options *metav1.ListOptions) {
+		listerWatcher := toolscache.NewFilteredListWatchFromClient(getClientForGVK(gvk, clientSet), plural, opts.Namespace, func(options *metav1.ListOptions) {
 			options.LabelSelector = label
 		})
 
@@ -99,7 +107,7 @@ func buildInformerMap(clientSet *kubernetes.Clientset, opts cache.Options, gvkLa
 		}
 
 		// Create new inforemer with the listerwatcher
-		informer := toolscache.NewSharedIndexInformer(listerWatcher, typed, resync, toolscache.Indexers{})
+		informer := toolscache.NewSharedIndexInformer(listerWatcher, typed, resync, toolscache.Indexers{toolscache.NamespaceIndex: toolscache.MetaNamespaceIndexFunc})
 
 		informerMap[gvk] = informer
 		// Build list type for the GVK
@@ -115,6 +123,7 @@ type filteredCache struct {
 	informerMap      map[schema.GroupVersionKind]toolscache.SharedIndexInformer
 	labelSelectorMap map[schema.GroupVersionKind]string
 	fallback         cache.Cache
+	namespace        string
 	Scheme           *runtime.Scheme
 }
 
@@ -126,7 +135,6 @@ func (c filteredCache) Get(ctx context.Context, key client.ObjectKey, obj runtim
 	// Get the GVK of the runtime object
 	gvk, err := apiutil.GVKForObject(obj, c.Scheme)
 	if err != nil {
-		klog.Error(err)
 		return err
 	}
 
@@ -135,7 +143,6 @@ func (c filteredCache) Get(ctx context.Context, key client.ObjectKey, obj runtim
 		if err := c.getFromStore(informer, key, obj, gvk); err == nil {
 			// If not found the object from cache, then fetch it from k8s apiserver
 		} else if err := c.getFromClient(ctx, key, obj, gvk); err != nil {
-			klog.Error(err)
 			return err
 		}
 		return nil
@@ -189,7 +196,7 @@ func (c filteredCache) getFromClient(ctx context.Context, key client.ObjectKey, 
 
 	// Get resource by the kubeClient
 	resource := kindToResource(gvk.Kind)
-	result, err := c.clientSet.CoreV1().RESTClient().
+	result, err := getClientForGVK(gvk, c.clientSet).
 		Get().
 		Namespace(key.Namespace).
 		Name(key.Name).
@@ -230,22 +237,34 @@ func (c filteredCache) List(ctx context.Context, list runtime.Object, opts ...cl
 		listOpts := client.ListOptions{}
 		listOpts.ApplyOptions(opts)
 
-		// If the labelSelector doesn't match, then list resources from the k8sClient
-		if listOpts.LabelSelector == nil {
-			return c.ListFromClient(ctx, list, gvk, opts...)
-		}
-		if listOpts.LabelSelector != nil && listOpts.LabelSelector.String() != c.labelSelectorMap[listToGVK(gvk)] {
-			return c.ListFromClient(ctx, list, gvk, opts...)
-		}
-
 		// Check the labelSelector
 		var labelSel labels.Selector
 		if listOpts.LabelSelector != nil {
 			labelSel = listOpts.LabelSelector
 		}
 
-		// Get the list from the cache
-		objList = informer.GetStore().List()
+		if listOpts.FieldSelector != nil {
+			// combining multiple indices, GetIndexers, etc
+			field, val, requiresExact := requiresExactMatch(listOpts.FieldSelector)
+			if !requiresExact {
+				return fmt.Errorf("non-exact field matches are not supported by the cache")
+			}
+			// list all objects by the field selector.  If this is namespaced and we have one, ask for the
+			// namespaced index key.  Otherwise, ask for the non-namespaced variant by using the fake "all namespaces"
+			// namespace.
+			objList, err = informer.GetIndexer().ByIndex(FieldIndexName(field), KeyToNamespacedKey(listOpts.Namespace, val))
+		} else if listOpts.Namespace != "" {
+			objList, err = informer.GetIndexer().ByIndex(toolscache.NamespaceIndex, listOpts.Namespace)
+		} else {
+			objList = informer.GetIndexer().List()
+		}
+		if err != nil {
+			return err
+		}
+
+		if len(objList) == 0 {
+			return c.ListFromClient(ctx, list, gvk, opts...)
+		}
 
 		// Check namespace and labelSelector
 		runtimeObjList := make([]runtime.Object, 0, len(objList))
@@ -259,7 +278,18 @@ func (c filteredCache) List(ctx context.Context, list runtime.Object, opts ...cl
 				return err
 			}
 
-			if listOpts.Namespace != "" && listOpts.Namespace != meta.GetNamespace() {
+			var namespace string
+
+			if c.namespace != "" {
+				if listOpts.Namespace != "" && c.namespace != listOpts.Namespace {
+					return fmt.Errorf("unable to list from namespace : %v because of unknown namespace for the cache", listOpts.Namespace)
+				}
+				namespace = c.namespace
+			} else if listOpts.Namespace != "" {
+				namespace = listOpts.Namespace
+			}
+
+			if namespace != "" && namespace != meta.GetNamespace() {
 				continue
 			}
 
@@ -296,11 +326,22 @@ func (c filteredCache) ListFromClient(ctx context.Context, list runtime.Object, 
 		labelSelector = listOpts.LabelSelector.String()
 	}
 
+	var namespace string
+
+	if c.namespace != "" {
+		if listOpts.Namespace != "" && c.namespace != listOpts.Namespace {
+			return fmt.Errorf("unable to list from namespace : %v because of unknown namespace for the cache", listOpts.Namespace)
+		}
+		namespace = c.namespace
+	} else if listOpts.Namespace != "" {
+		namespace = listOpts.Namespace
+	}
+
 	resource := kindToResource(gvk.Kind[:len(gvk.Kind)-4])
 
-	result, err := c.clientSet.CoreV1().RESTClient().
+	result, err := getClientForGVK(gvk, c.clientSet).
 		Get().
-		Namespace(listOpts.Namespace).
+		Namespace(namespace).
 		Resource(resource).
 		VersionedParams(&metav1.ListOptions{
 			LabelSelector: labelSelector,
@@ -387,12 +428,50 @@ func (c filteredCache) IndexField(ctx context.Context, obj runtime.Object, field
 		return err
 	}
 
-	if _, ok := c.informerMap[gvk]; ok {
-		klog.Infof("IndexField for %s not supported", gvk.String())
-		return errors.New("IndexField for " + gvk.String() + " not supported")
+	if informer, ok := c.informerMap[gvk]; ok {
+		return indexByField(informer, field, extractValue)
 	}
 
 	return c.fallback.IndexField(ctx, obj, field, extractValue)
+}
+
+func indexByField(indexer cache.Informer, field string, extractor client.IndexerFunc) error {
+	indexFunc := func(objRaw interface{}) ([]string, error) {
+		// TODO(directxman12): check if this is the correct type?
+		obj, isObj := objRaw.(runtime.Object)
+		if !isObj {
+			return nil, fmt.Errorf("object of type %T is not an Object", objRaw)
+		}
+		meta, err := apimeta.Accessor(obj)
+		if err != nil {
+			return nil, err
+		}
+		ns := meta.GetNamespace()
+
+		rawVals := extractor(obj)
+		var vals []string
+		if ns == "" {
+			// if we're not doubling the keys for the namespaced case, just re-use what was returned to us
+			vals = rawVals
+		} else {
+			// if we need to add non-namespaced versions too, double the length
+			vals = make([]string, len(rawVals)*2)
+		}
+		for i, rawVal := range rawVals {
+			// save a namespaced variant, so that we can ask
+			// "what are all the object matching a given index *in a given namespace*"
+			vals[i] = KeyToNamespacedKey(ns, rawVal)
+			if ns != "" {
+				// if we have a namespace, also inject a special index key for listing
+				// regardless of the object namespace
+				vals[i+len(rawVals)] = KeyToNamespacedKey("", rawVal)
+			}
+		}
+
+		return vals, nil
+	}
+
+	return indexer.AddIndexers(toolscache.Indexers{FieldIndexName(field): indexFunc})
 }
 
 // kindToResource converts kind to resource
@@ -403,4 +482,55 @@ func kindToResource(kind string) string {
 // listToGVK converts GVK list to GVK
 func listToGVK(list schema.GroupVersionKind) schema.GroupVersionKind {
 	return schema.GroupVersionKind{Group: list.Group, Version: list.Version, Kind: list.Kind[:len(list.Kind)-4]}
+}
+
+// requiresExactMatch checks if the given field selector is of the form `k=v` or `k==v`.
+func requiresExactMatch(sel fields.Selector) (field, val string, required bool) {
+	reqs := sel.Requirements()
+	if len(reqs) != 1 {
+		return "", "", false
+	}
+	req := reqs[0]
+	if req.Operator != selection.Equals && req.Operator != selection.DoubleEquals {
+		return "", "", false
+	}
+	return req.Field, req.Value, true
+}
+
+// FieldIndexName constructs the name of the index over the given field,
+// for use with an indexer.
+func FieldIndexName(field string) string {
+	return "field:" + field
+}
+
+// noNamespaceNamespace is used as the "namespace" when we want to list across all namespaces
+const allNamespacesNamespace = "__all_namespaces"
+
+// KeyToNamespacedKey prefixes the given index key with a namespace
+// for use in field selector indexes.
+func KeyToNamespacedKey(ns string, baseKey string) string {
+	if ns != "" {
+		return ns + "/" + baseKey
+	}
+	return allNamespacesNamespace + "/" + baseKey
+}
+
+func getClientForGVK(gvk schema.GroupVersionKind, k8sClient *kubernetes.Clientset) toolscache.Getter {
+	switch gvk.GroupVersion() {
+	case corev1.SchemeGroupVersion:
+		return k8sClient.CoreV1().RESTClient()
+	case appsv1.SchemeGroupVersion:
+		return k8sClient.AppsV1().RESTClient()
+	case batchv1.SchemeGroupVersion:
+		return k8sClient.BatchV1().RESTClient()
+	case networkingv1.SchemeGroupVersion:
+		return k8sClient.NetworkingV1().RESTClient()
+	case rbacv1.SchemeGroupVersion:
+		return k8sClient.RbacV1().RESTClient()
+	case storagev1.SchemeGroupVersion:
+		return k8sClient.StorageV1().RESTClient()
+	case certificatesv1beta1.SchemeGroupVersion:
+		return k8sClient.CertificatesV1beta1().RESTClient()
+	}
+	return nil
 }

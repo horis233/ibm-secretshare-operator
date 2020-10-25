@@ -19,10 +19,14 @@ package controllers
 import (
 	"context"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
+
+	// "k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -45,32 +49,70 @@ func (r *SecretShareReconciler) listSecret(ns string) (*corev1.SecretList, error
 	// if err := r.Client.List(context.TODO(), secretList, &client.ListOptions{Namespace: ns}, client.MatchingLabels(map[string]string{"secretshareName": "common-services"})); err != nil {
 	// 	return nil, err
 	// }
-	if err := r.Client.List(context.TODO(), secretList, &client.ListOptions{
-		Namespace:     ns,
-		FieldSelector: fields.OneTermEqualSelector("metadata.name", "audit-certs"),
-	}); err != nil {
+	if err := r.Client.List(context.TODO(), secretList, &client.ListOptions{}); err != nil {
+		klog.Error(err)
 		return nil, err
 	}
-	for _, secret := range secretList.Items {
-		klog.Info(secret.Namespace + "/" + secret.Name)
-	}
-	klog.Info(len(secretList.Items))
+	// for _, secret := range secretList.Items {
+	// 	klog.Info(secret.Namespace + "/" + secret.Name)
+	// }
+	klog.Info("secret num: ", len(secretList.Items))
 
 	cmList := &corev1.ConfigMapList{}
 
 	if err := r.Client.List(context.TODO(), cmList, &client.ListOptions{
 		Namespace: ns,
 	}); err != nil {
+		klog.Error(err)
 		return nil, err
 	}
+	klog.Info("cm num: ", len(cmList.Items))
 
-	podList := &corev1.PodList{}
+	// podList := &corev1.PodList{}
 
-	if err := r.Client.List(context.TODO(), podList, &client.ListOptions{
-		Namespace: ns,
+	// if err := r.Client.List(context.TODO(), podList, &client.ListOptions{
+	// 	Namespace: ns,
+	// }); err != nil {
+	// 	return nil, err
+	// }
+
+	deployList := &appsv1.DeploymentList{}
+
+	if err := r.Client.List(context.TODO(), deployList, &client.ListOptions{}); err != nil {
+		klog.Error(err)
+	}
+
+	for _, deploy := range deployList.Items {
+		klog.Info(deploy.Namespace + "/" + deploy.Name)
+	}
+	klog.Info(len(deployList.Items))
+
+	// klog.Info(deployList.Items[0].Namespace + "/" + deployList.Items[0].Name)
+
+	deployList = &appsv1.DeploymentList{}
+
+	req, _ := labels.NewRequirement("test", selection.Exists, nil)
+
+	ls := labels.NewSelector().Add(*req)
+	// labelSelector := labels.SelectorHasLabel(map[string]string{"test": "test"})
+	if err := r.Client.List(context.TODO(), deployList, &client.ListOptions{
+		LabelSelector: ls,
 	}); err != nil {
+		klog.Error(err)
 		return nil, err
 	}
+
+	klog.Info(len(deployList.Items))
+
+	// deploy := &appsv1.Deployment{}
+
+	// if err := r.Client.Get(context.TODO(), types.NamespacedName{Name: "ibm", Namespace: ns}, deploy); err != nil {
+	// 	klog.Error(err)
+	// 	return nil, err
+	// }
+
+	// klog.Info(deploy.Name)
+
 	return secretList, nil
 }
 
