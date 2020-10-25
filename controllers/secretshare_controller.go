@@ -305,7 +305,7 @@ func getCMSecretToSS() handler.ToRequestsFunc {
 func getDeployToSS() handler.ToRequestsFunc {
 	return func(object handler.MapObject) []reconcile.Request {
 		secretshare := []reconcile.Request{}
-		klog.Info(object.Meta.GetNamespace(), "/", object.Meta.GetName())
+		// klog.Info(object.Meta.GetNamespace(), "/", object.Meta.GetName())
 		secretshare = append(secretshare, reconcile.Request{NamespacedName: types.NamespacedName{Name: "common-service", Namespace: "ibm-common-service"}})
 
 		return secretshare

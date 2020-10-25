@@ -53,9 +53,10 @@ func (r *SecretShareReconciler) listSecret(ns string) (*corev1.SecretList, error
 		klog.Error(err)
 		return nil, err
 	}
-	// for _, secret := range secretList.Items {
-	// 	klog.Info(secret.Namespace + "/" + secret.Name)
-	// }
+
+	for _, secret := range secretList.Items {
+		klog.Info("Secret: " + secret.Namespace + "/" + secret.Name)
+	}
 	klog.Info("secret num: ", len(secretList.Items))
 
 	cmList := &corev1.ConfigMapList{}
@@ -67,6 +68,10 @@ func (r *SecretShareReconciler) listSecret(ns string) (*corev1.SecretList, error
 		return nil, err
 	}
 	klog.Info("cm num: ", len(cmList.Items))
+	for _, cm := range cmList.Items {
+		klog.Info("ConfigMap: " + cm.Namespace + "/" + cm.Name)
+	}
+	klog.Info(len(cmList.Items))
 
 	// podList := &corev1.PodList{}
 
@@ -82,16 +87,16 @@ func (r *SecretShareReconciler) listSecret(ns string) (*corev1.SecretList, error
 		klog.Error(err)
 	}
 
-	for _, deploy := range deployList.Items {
-		klog.Info(deploy.Namespace + "/" + deploy.Name)
-	}
-	klog.Info(len(deployList.Items))
+	// for _, deploy := range deployList.Items {
+	// 	klog.Info(deploy.Namespace + "/" + deploy.Name)
+	// }
+	// klog.Info(len(deployList.Items))
 
 	// klog.Info(deployList.Items[0].Namespace + "/" + deployList.Items[0].Name)
 
 	deployList = &appsv1.DeploymentList{}
 
-	req, _ := labels.NewRequirement("test", selection.Exists, nil)
+	req, _ := labels.NewRequirement("app", selection.Exists, nil)
 
 	ls := labels.NewSelector().Add(*req)
 	// labelSelector := labels.SelectorHasLabel(map[string]string{"test": "test"})

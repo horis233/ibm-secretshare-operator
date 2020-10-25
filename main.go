@@ -21,7 +21,7 @@ import (
 	"os"
 
 	olmv1alpha1 "github.com/operator-framework/operator-lifecycle-manager/pkg/api/apis/operators/v1alpha1"
-	// appsv1 "k8s.io/api/apps/v1"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -62,10 +62,17 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 
-	gvkLabelMap := map[schema.GroupVersionKind]string{
-		corev1.SchemeGroupVersion.WithKind("Secret"):    "secretshareName",
-		corev1.SchemeGroupVersion.WithKind("ConfigMap"): "secretshareName",
-		// appsv1.SchemeGroupVersion.WithKind("Deployment"): "test",
+	gvkLabelMap := map[schema.GroupVersionKind]utils.Selector{
+		corev1.SchemeGroupVersion.WithKind("Secret"): utils.Selector{
+			FieldSelector: "metadata.name==icp-mongodb-admin",
+			LabelSelector: "secretshareName",
+		},
+		corev1.SchemeGroupVersion.WithKind("ConfigMap"): utils.Selector{
+			LabelSelector: "secretshareName",
+		},
+		appsv1.SchemeGroupVersion.WithKind("Deployment"): utils.Selector{
+			LabelSelector: "app",
+		},
 	}
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:             scheme,
