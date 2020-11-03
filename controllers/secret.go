@@ -19,6 +19,7 @@ package controllers
 import (
 	"context"
 
+	route "github.com/openshift/api/route/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -108,6 +109,16 @@ func (r *SecretShareReconciler) listSecret(ns string) (*corev1.SecretList, error
 	}
 
 	klog.Info(len(deployList.Items))
+
+	routeList := &route.RouteList{}
+	if err := r.Client.List(context.TODO(), routeList, &client.ListOptions{}); err != nil {
+		klog.Error(err)
+		return nil, err
+	}
+	klog.Info(len(routeList.Items))
+	for _, deploy := range routeList.Items {
+		klog.Info(deploy.Namespace + "/" + deploy.Name)
+	}
 
 	// deploy := &appsv1.Deployment{}
 

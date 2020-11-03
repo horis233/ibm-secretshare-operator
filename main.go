@@ -20,6 +20,7 @@ import (
 	"flag"
 	"os"
 
+	route "github.com/openshift/api/route/v1"
 	olmv1alpha1 "github.com/operator-framework/operator-lifecycle-manager/pkg/api/apis/operators/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -48,6 +49,8 @@ func init() {
 
 	utilruntime.Must(ibmcpcsibmcomv1.AddToScheme(scheme))
 	utilruntime.Must(olmv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(route.AddToScheme(scheme))
+
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -63,15 +66,18 @@ func main() {
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 
 	gvkLabelMap := map[schema.GroupVersionKind]utils.Selector{
-		corev1.SchemeGroupVersion.WithKind("Secret"): utils.Selector{
+		corev1.SchemeGroupVersion.WithKind("Secret"): {
 			FieldSelector: "metadata.name==icp-mongodb-admin",
 			LabelSelector: "secretshareName",
 		},
-		corev1.SchemeGroupVersion.WithKind("ConfigMap"): utils.Selector{
+		corev1.SchemeGroupVersion.WithKind("ConfigMap"): {
 			LabelSelector: "secretshareName",
 		},
-		appsv1.SchemeGroupVersion.WithKind("Deployment"): utils.Selector{
+		appsv1.SchemeGroupVersion.WithKind("Deployment"): {
 			LabelSelector: "app",
+		},
+		route.GroupVersion.WithKind("Route"): {
+			LabelSelector: "app==management-ingress",
 		},
 	}
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
